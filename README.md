@@ -198,6 +198,49 @@ Fazer *backup* da BD antes de qualquer *migrate* (`mysqldump`).
 O guia detalhado (layout na hospedagem, permissões, opção `public_html`, *rollback*) está em
 `produ.md` no repositório do projeto.
 
+### Servidor sem terminal
+
+Se a hospedagem não disponibilizar consola (SSH/terminal), os comandos acima executam-se por um
+**script temporário** acedido no navegador — corre dentro do próprio PHP (não usa `shell_exec`).
+
+Criar `public/deploy.php` pelo *File Manager* e abrir uma vez por comando:
+
+```php
+<?php
+// TEMPORÁRIO — apagar imediatamente após o deploy
+if (!isset($_GET['chave']) || $_GET['chave'] !== 'TROQUE-ESTE-VALOR') {
+    http_response_code(404);
+    exit;
+}
+$permitidos = ['key:generate', 'migrate --force', 'db:seed --force', 'optimize', 'optimize:clear', 'storage:link'];
+$cmd = $_GET['cmd'] ?? '';
+if (!in_array($cmd, $permitidos, true)) {
+    exit('comando nao permitido');
+}
+require __DIR__ . '/../vendor/autoload.php';
+$app = require __DIR__ . '/../bootstrap/app.php';
+$kernel = $app->make(Illuminate\Contracts\Console\Kernel::class);
+$kernel->bootstrap();
+echo '<pre>' . htmlspecialchars(Illuminate\Support\Facades\Artisan::call($cmd)) . '</pre>';
+echo 'OK: ' . $cmd;
+```
+
+Sequência (ex.: `https://www.havredesign.ao/deploy.php?chave=…&cmd=key:generate`):
+
+1. Subir ficheiros e criar `.env` (de `.env.production.example`) pelo *File Manager*.
+2. Permissões `775` em `storage/` e `bootstrap/cache/`.
+3. `cmd=key:generate` → `cmd=migrate --force` → (`cmd=db:seed --force` **só** na 1.ª publicação).
+4. `cmd=storage:link` → `cmd=optimize`.
+5. **Apagar `public/deploy.php`** e verificar `/`, `/networking`, `/{ADMIN_PATH}`.
+
+Notas:
+- O ficheiro dá acesso a operações administrativas a quem souber a URL — usar `chave` longa e
+  única por ambiente e **nunca deixá-lo no ar**; `.env` tem de ser gravável pelo PHP.
+- Se `storage:link` falhar (symlink bloqueado pela hospedagem), copiar `storage/app/public` para
+  `public_html/storage` pelo *File Manager* (o README do Laravel documenta esta alternativa).
+- Alternativa sem script: um *cron job* único no painel de controlo
+  (`php -f /home/USER/public_html/artisan -- migrate --force`), removido a seguir.
+
 ## 11. Segurança
 
 - Rotas do painel com `auth` + `role:ADMIN`; caminho do painel configurável (`ADMIN_PATH`) fora de
