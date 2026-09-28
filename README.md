@@ -205,6 +205,13 @@ Se a hospedagem não disponibilizar consola (SSH/terminal), os comandos acima ex
 
 Criar `public/deploy.php` pelo *File Manager* e abrir uma vez por comando:
 
+> **Layout com `public_html` fixo** (docroot do domínio = `public_html`, código fora — ver
+> `produ.md` §4 *Opção B*): o `deploy.php` fica em `public_html/` e os dois `require` passam a
+> `require __DIR__ . '/../app/vendor/autoload.php';` e
+> `$app = require __DIR__ . '/../app/bootstrap/app.php';` (pasta `app/` = código, fora do alcance
+> do navegador). O mesmo ajuste — `__DIR__.'/../` → `__DIR__.'/../app/` nas **3** ocorrências —
+> tem de ser feito no `public_html/index.php`.
+
 ```php
 <?php
 // TEMPORÁRIO — apagar imediatamente após o deploy
