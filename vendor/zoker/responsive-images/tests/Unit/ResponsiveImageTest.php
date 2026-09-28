@@ -1,0 +1,118 @@
+<?php
+
+declare(strict_types=1);
+
+namespace Zoker\ResponsiveImages\Tests\Unit;
+
+use Zoker\ResponsiveImages\ResponsiveImage;
+use Zoker\ResponsiveImages\Tests\TestCase;
+
+class ResponsiveImageTest extends TestCase
+{
+    private function makeImage(): ResponsiveImage
+    {
+        return new ResponsiveImage(
+            src: 'https://cdn.test/img-1024.webp',
+            generatedImages: [
+                320 => 'https://cdn.test/img-320.webp',
+                640 => 'https://cdn.test/img-640.webp',
+                1024 => 'https://cdn.test/img-1024.webp',
+            ],
+            sizes: '100vw',
+            width: 1024,
+            height: 768,
+            format: 'webp',
+        );
+    }
+
+    public function test_get_images_returns_the_generated_map(): void
+    {
+        $this->assertCount(3, $this->makeImage()->getImages());
+    }
+
+    public function test_get_image_picks_the_smallest_size_at_or_above_the_width(): void
+    {
+        $image = $this->makeImage();
+
+        $this->assertEquals('https://cdn.test/img-320.webp', $image->getImage(100));
+        $this->assertEquals('https://cdn.test/img-320.webp', $image->getImage(320));
+        $this->assertEquals('https://cdn.test/img-640.webp', $image->getImage(500));
+    }
+
+    public function test_get_image_falls_back_to_the_largest_when_width_exceeds_all(): void
+    {
+        $this->assertEquals('https://cdn.test/img-1024.webp', $this->makeImage()->getImage(2000));
+    }
+
+    public function test_get_srcset_lists_each_size(): void
+    {
+        $srcset = $this->makeImage()->getSrcset();
+
+        $this->assertStringContainsString('https://cdn.test/img-320.webp 320w', $srcset);
+        $this->assertStringContainsString('https://cdn.test/img-1024.webp 1024w', $srcset);
+        $this->assertEquals(3, substr_count($srcset, 'w,') + 1);
+    }
+
+    public function test_to_html_renders_the_picture_view_with_attributes(): void
+    {
+        $html = $this->makeImage()->toHtml('Alt text', 'eager', ['class' => 'rounded']);
+
+        $this->assertStringContainsString('https://cdn.test/img-1024.webp', $html);
+        $this->assertStringContainsString('alt="Alt text"', $html);
+        $this->assertStringContainsString('loading="eager"', $html);
+        $this->assertStringContainsString('class="rounded"', $html);
+        $this->assertStringContainsString('width="1024"', $html);
+        $this->assertStringContainsString('height="768"', $html);
+    }
+
+    public function test_to_html_omits_zero_dimensions(): void
+    {
+        $image = new ResponsiveImage('s.webp', [0 => 's.webp'], '100vw', 0, 0, 'webp');
+
+        $html = $image->toHtml();
+
+        $this->assertStringNotContainsString('width=', $html);
+        $this->assertStringNotContainsString('height=', $html);
+    }
+
+    public function test_get_image_returns_src_when_nothing_is_generated(): void
+    {
+        $image = new ResponsiveImage('https://cdn.test/logo.svg', [], '100vw', 0, 0, 'svg');
+
+        $this->assertSame('https://cdn.test/logo.svg', $image->getImage(500));
+    }
+
+    public function test_get_srcset_skips_non_positive_widths(): void
+    {
+        $image = new ResponsiveImage('s.webp', [0 => 's.webp'], '100vw', 0, 0, 'webp');
+
+        $this->assertSame('', $image->getSrcset());
+        $this->assertFalse($image->hasSource());
+        $this->assertStringNotContainsString('<source', $image->toHtml());
+    }
+
+    public function test_has_source_requires_the_output_format(): void
+    {
+        $image = new ResponsiveImage('a.jpg', [320 => 'a.jpg'], '100vw', 320, 0, 'jpg');
+
+        $this->assertFalse($image->hasSource());
+        $this->assertTrue($this->makeImage()->hasSource());
+        $this->assertStringContainsString('<source', $this->makeImage()->toHtml());
+    }
+
+    public function test_srcset_property_matches_get_srcset(): void
+    {
+        $image = $this->makeImage();
+
+        $this->assertSame($image->getSrcset(), $image->srcset);
+        $this->assertStringContainsString('https://cdn.test/img-640.webp 640w', $image->srcset);
+    }
+
+    public function test_to_html_uses_the_image_sizes_by_default_and_the_given_sizes_when_passed(): void
+    {
+        $image = $this->makeImage();
+
+        $this->assertStringContainsString('sizes="100vw"', $image->toHtml());
+        $this->assertStringContainsString('sizes="(min-width: 1024px) 33vw, 100vw"', $image->toHtml('Alt', 'lazy', [], '(min-width: 1024px) 33vw, 100vw'));
+    }
+}

@@ -1,0 +1,255 @@
+# Responsive Images for Laravel
+
+Laravel package for automatic image conversion to WebP and responsive sizes generation.
+
+## Installation
+
+```bash
+composer require zoker/responsive-images
+```
+
+## Configuration
+
+Publish the configuration file:
+
+```bash
+php artisan vendor:publish --tag="responsive-images-config"
+```
+
+### Driver
+
+```php
+// config/responsive-images.php
+'driver' => env('RESPONSIVE_IMAGES_DRIVER', extension_loaded('imagick') ? 'imagick' : 'gd'),
+```
+
+Imagick is the default when `ext-imagick` is loaded; otherwise the package falls back to GD, so a server without the extension keeps working. Set `RESPONSIVE_IMAGES_DRIVER` to pin one.
+
+| | `imagick` (default) | `gd` (fallback) |
+|---|---|---|
+| PHP extension | `ext-imagick` | `ext-gd` |
+| Reads | jpg/jpeg, png, webp, gif, avif, bmp, tif/tiff, heic/heif and whatever the ImageMagick build supports | jpg/jpeg, png, webp, gif, avif, bmp |
+| Animated GIF | animated WebP (every frame is resized for every breakpoint, so slower and heavier) | static WebP (first frame only) |
+| Photos | faster (≈1.7× on a 4000×3000 JPEG) | slower |
+| Memory | ≈1.8× more, allocated outside PHP: `memory_limit` does not cap it, size queue workers accordingly | less, counted in `memory_limit` |
+
+Run `php artisan responsive-images:clear` after switching the driver: generated file names do not depend on it, so the old files would keep being served.
+
+### Supported Formats
+
+Only files whose extension is listed in `extensions` are converted (comparison is case-insensitive, so `PHOTO.JPG` counts as `jpg`):
+
+```php
+// config/responsive-images.php
+'extensions' => ['jpg', 'jpeg', 'png', 'webp', 'gif', 'avif', 'bmp', 'tif', 'tiff', 'heic', 'heif'],
+```
+
+A listed extension is converted only if the driver on this server can read it: GD is checked with `imagetypes()` (AVIF needs GD built with libavif), Imagick with `Imagick::queryFormats()` (HEIC needs ImageMagick built with libheif). With `gd`, tif/tiff/heic/heif are therefore served as-is.
+
+> **Never add vector or document formats** (`svg`, `pdf`, `ps`, `eps`) when using Imagick: ImageMagick hands them to external delegates, which is a known attack surface. SVG is best served as-is anyway.
+
+> **Animated GIF** with the `gd` driver becomes a static WebP. Use `imagick`, or remove `gif` from `extensions`.
+
+**Formats browsers cannot display** (tif/tiff, heic/heif). Before the job has run, the untouched original would be useless as a fallback, so the first `make()` converts the full-size WebP synchronously (one conversion; the breakpoint sizes are still built by the job). If that conversion fails, the error is reported and the original URL is returned.
+
+Any other file (`svg`, ...) is served as-is:
+
+- no `GenerateResponsiveImages` job is dispatched and nothing is written to the output disk;
+- `make()` returns a `ResponsiveImage` with `src` = URL of the original on the source disk, empty `generatedImages`, and `format` = the file extension;
+- `generate()` returns `null`;
+- the rendered `<picture>` contains only the `<img>`, without `<source>`.
+
+A `<source type="image/webp">` is rendered only once generated images in the output `format` exist. Until the job has finished, the original (or its WebP copy) is rendered as a plain `<img>`.
+
+## Usage
+
+### Facade
+
+```php
+use Zoker\ResponsiveImages\Facades\ResponsiveImages;
+
+// With specific dimensions
+$image = ResponsiveImages::make(
+    'uploads/products/image.jpg',
+    width: 1200,
+    height: 800,
+    disk: 'public',
+);
+
+// Or use original image dimensions
+$image = ResponsiveImages::make(
+    'uploads/products/image.jpg',
+    disk: 'public',
+);
+
+// Default: lazy loading
+echo $image->toHtml('Product image');
+
+// For hero images: eager loading
+echo $image->toHtml('Hero image', 'eager');
+```
+
+### Blade Component
+
+```blade
+{{-- With specific dimensions --}}
+<x-responsive-image
+    path="uploads/products/image.jpg"
+    :width="1200"
+    :height="800"
+    alt="Product image"
+    disk="public"
+/>
+
+{{-- Or use original dimensions --}}
+<x-responsive-image
+    path="uploads/products/image.jpg"
+    alt="Product image"
+    disk="public"
+/>
+
+{{-- Hero image with eager loading --}}
+<x-responsive-image
+    path="uploads/hero.jpg"
+    :width="1920"
+    :height="1080"
+    alt="Hero image"
+    loading="eager"
+    disk="public"
+/>
+{{-- Image in a one-third column: let the browser pick a size for 33vw, not 100vw --}}
+<x-responsive-image
+    path="uploads/products/image.jpg"
+    :width="800"
+    alt="Product image"
+    sizes="(min-width: 1024px) 33vw, 100vw"
+/>
+```
+
+### Blade Directive
+
+```blade
+{{-- Default: lazy loading --}}
+@responsiveImage(
+    'uploads/products/image.jpg',
+    width: 1200,
+    height: 800,
+    alt: 'Product image',
+    disk: 'public'
+)
+
+{{-- Hero image with eager loading --}}
+@responsiveImage(
+    'uploads/hero.jpg',
+    width: 1920,
+    height: 1080,
+    alt: 'Hero image',
+    loading: 'eager',
+    disk: 'public'
+)
+{{-- Custom sizes attribute --}}
+@responsiveImage(
+    'uploads/products/image.jpg',
+    width: 800,
+    alt: 'Product image',
+    sizes: '(min-width: 1024px) 33vw, 100vw'
+)
+```
+
+### Working with the `ResponsiveImage` Object
+
+`ResponsiveImages::make()` returns a `ResponsiveImage` object with the following methods:
+
+```php
+$image = ResponsiveImages::make('uploads/products/image.jpg', width: 1200, height: 800);
+
+// Get all generated images as [width => url] array
+$image->getImages();
+// e.g. [320 => 'https://...', 640 => 'https://...', 1200 => 'https://...']
+
+// Get the URL of the closest generated image to the given width
+// Prefers equal or larger sizes; falls back to largest available if all are smaller.
+// Returns $src when nothing has been generated (e.g. SVG or before the job has run)
+$image->getImage(500);
+// returns URL of the nearest generated size (e.g. 640px version)
+
+// Get srcset string
+$image->getSrcset();
+// e.g. "https://.../image-320-abc.webp 320w, https://.../image-640-def.webp 640w, ..."
+
+// Whether a <source> is rendered (generated images in the output format exist)
+$image->hasSource();
+
+// Render as HTML <picture> element
+$image->toHtml('Alt text');
+$image->toHtml('Alt text', 'eager');
+$image->toHtml('Alt text', 'lazy', ['class' => 'my-image']);
+// Override the sizes attribute (the image itself is not affected, so it is not part of the cache key)
+$image->toHtml('Alt text', 'lazy', [], '(min-width: 1024px) 33vw, 100vw');
+```
+
+Available public properties:
+
+| Property | Type | Description |
+|---|---|---|
+| `$src` | `string` | URL of the largest generated image (or the original / fallback) |
+| `$generatedImages` | `array` | All generated images as `[width => url]` |
+| `$srcset` | `string` | The `srcset` attribute value (same as `getSrcset()`; handy where methods cannot be called, e.g. sandboxed Twig) |
+| `$sizes` | `string` | The default `sizes` attribute value (`100vw`) |
+| `$width` | `int` | Target width |
+| `$height` | `int` | Target height |
+| `$format` | `string` | Output format (e.g. `webp`), or the source extension for unsupported files / fallback |
+
+## Artisan Commands
+
+### Clear Generated Images
+
+```bash
+# Clear all
+php artisan responsive-images:clear
+
+# Clear for specific file
+php artisan responsive-images:clear uploads/products/image.jpg
+```
+
+> **Note:** Images are automatically regenerated when the original file changes or config parameters are updated. No manual regeneration needed!
+
+### Dimensions
+
+`width` and `height` of the result (and of the rendered `<img>`) are the same whether `make()` builds it from freshly generated files or from files already on the output disk:
+
+| Arguments | Target size | Generated widths |
+|---|---|---|
+| `width` and `height` | as passed, the original is not read | breakpoints ≤ `width`, plus `width` |
+| `width` only | `height` = `width` × original ratio | breakpoints ≤ `width`, plus `width` |
+| `height` only | `width` = original width, `height` as passed | breakpoints ≤ original width, plus it |
+| none | original width and height | breakpoints ≤ original width, plus it |
+
+When the original has to be consulted, only its header is read (`getimagesize()`, no decoding). A JPEG/TIFF with an EXIF orientation of 5–8 is auto-rotated on conversion, so its width and height are swapped here too. If the header cannot be read (e.g. HEIC, which `getimagesize()` does not understand, or a corrupt file), the result carries the passed values (`0` when omitted) and the missing sizes are requested on every cache refresh, as before.
+
+### Cache
+
+The result of `make()` is cached with `Cache::flexible()` in `cache_store`; `cache_ttl` is `[stale, expire]` in seconds, `[86400, 604800]` by default. A cache hit touches neither disk nor image. The entry is recomputed in the background after `stale`, and synchronously after `expire`. It only changes when the original file, `breakpoints`, `quality` or `format` change, so after replacing an image under the same name run `php artisan responsive-images:clear` (or lower the TTL).
+
+### Paths
+
+A leading `/` in the source path is ignored: `make('/uploads/a.jpg')` is the same image, cache entry and job as `make('uploads/a.jpg')`. `make('/')` and `make('')` return `null`, and `responsive-images:clear /` clears everything.
+
+## How It Works
+
+1. Package accepts image path, optional target width and height (uses original dimensions if not specified), Alt attribute, optional disk (uses default disk if not specified)
+2. Automatically calculates responsive sizes based on breakpoints from config
+3. Converts image to WebP
+4. Generates versions for each size with hash-based filenames
+5. Caches results using hash of (file modification time + dimensions + quality + format)
+6. Automatically invalidates cache when original file or parameters change
+7. Returns HTML with `<picture>` and `srcset`
+
+### Queue
+
+Missing sizes are built by the `GenerateResponsiveImages` job, and until it has run `make()` returns the fallback. Generation happens inside the `make()` call instead, and the first call already returns every size, when:
+
+- `queue` is `false` (`RESPONSIVE_IMAGES_QUEUE=false`), or
+- the default queue connection uses the `sync` driver.
+
+If that in-request generation fails, the error is reported and the fallback is returned, so the page still renders.

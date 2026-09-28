@@ -19,7 +19,8 @@
 /public/storage
 /storage/*.key
 /storage/pail
-/vendor
+# vendor versionado de proposito: o servidor faz deploy por git e nao tem composer
+# /vendor
 Homestead.json
 Homestead.yaml
 Thumbs.db
