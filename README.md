@@ -209,7 +209,9 @@ Criar `public/deploy.php` pelo *File Manager* e abrir uma vez por comando:
 > `produ.md` §4 *Opção B*): o `deploy.php` fica em `public_html/` e os dois `require` passam a
 > `require __DIR__ . '/../app/vendor/autoload.php';` e
 > `$app = require __DIR__ . '/../app/bootstrap/app.php';` (pasta `app/` = código, fora do alcance
-> do navegador). O mesmo ajuste — `__DIR__.'/../` → `__DIR__.'/../app/` nas **3** ocorrências —
+> do navegador), acrescentados de `$app->usePublicPath(__DIR__);` — senão `public_path()` aponta
+> para `~/app/public/` e as variantes WebP e os *uploads* do QR são gravados fora do *web root*.
+> O mesmo ajuste — `__DIR__.'/../` → `__DIR__.'/../app/` nas **3** ocorrências + `usePublicPath` —
 > tem de ser feito no `public_html/index.php`.
 
 ```php
